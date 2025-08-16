@@ -126,6 +126,7 @@ impl TodoList {
 enum AppMode {
     Selection,
     Edit,
+    Delete,
 }
 
 struct App {
@@ -133,7 +134,7 @@ struct App {
     selected_index: usize,
     mode: AppMode,
     edit_text: String,
-    edit_cursor: usize,
+    edit_cursor: usize, // Character position, not byte position
     config_dir: PathBuf,
     _lock_file: File,
     should_quit: bool,
@@ -266,6 +267,7 @@ impl App {
         match self.mode {
             AppMode::Selection => self.handle_selection_mode_key(key)?,
             AppMode::Edit => self.handle_edit_mode_key(key)?,
+            AppMode::Delete => self.handle_delete_mode_key(key)?,
         }
         Ok(())
     }
@@ -282,7 +284,7 @@ impl App {
             }
             KeyCode::Down | KeyCode::Char('j') => {
                 if !self.todo_list.items.is_empty()
-                    && self.selected_index < self.todo_list.items.len() - 1
+                    && self.selected_index < self.todo_list.items.len()
                 {
                     self.selected_index += 1;
                 }
@@ -297,11 +299,21 @@ impl App {
                 }
             }
             KeyCode::Char('i') => {
-                let new_item = TodoItem::new(String::new(), false, 0);
+                // Determine indentation level for new item
+                let indent_level = if self.todo_list.items.is_empty() {
+                    0
+                } else if self.selected_index == 0 {
+                    0
+                } else {
+                    let prev_index = (self.selected_index - 1).min(self.todo_list.items.len() - 1);
+                    self.todo_list.items[prev_index].indent_level
+                };
+
+                let new_item = TodoItem::new(String::new(), false, indent_level);
                 let insert_pos = if self.todo_list.items.is_empty() {
                     0
                 } else {
-                    self.selected_index
+                    self.selected_index.min(self.todo_list.items.len())
                 };
                 self.todo_list.items.insert(insert_pos, new_item);
                 self.selected_index = insert_pos;
@@ -314,8 +326,32 @@ impl App {
                     && self.selected_index < self.todo_list.items.len()
                 {
                     self.edit_text = self.todo_list.items[self.selected_index].text.clone();
-                    self.edit_cursor = self.edit_text.len();
+                    self.edit_cursor = self.edit_text.chars().count();
                     self.mode = AppMode::Edit;
+                }
+            }
+            KeyCode::Tab => {
+                if !self.todo_list.items.is_empty()
+                    && self.selected_index < self.todo_list.items.len()
+                {
+                    self.todo_list.items[self.selected_index].indent_level += 1;
+                    self.save_todo_list()?;
+                }
+            }
+            KeyCode::BackTab => {
+                if !self.todo_list.items.is_empty()
+                    && self.selected_index < self.todo_list.items.len()
+                    && self.todo_list.items[self.selected_index].indent_level > 0
+                {
+                    self.todo_list.items[self.selected_index].indent_level -= 1;
+                    self.save_todo_list()?;
+                }
+            }
+            KeyCode::Char('d') => {
+                if !self.todo_list.items.is_empty()
+                    && self.selected_index < self.todo_list.items.len()
+                {
+                    self.mode = AppMode::Delete;
                 }
             }
             _ => {}
@@ -351,30 +387,89 @@ impl App {
                 }
             }
             KeyCode::Right => {
-                if self.edit_cursor < self.edit_text.len() {
+                if self.edit_cursor < self.edit_text.chars().count() {
                     self.edit_cursor += 1;
                 }
             }
             KeyCode::Backspace => {
                 if self.edit_cursor > 0 {
-                    self.edit_text.remove(self.edit_cursor - 1);
-                    self.edit_cursor -= 1;
+                    // Find the byte position of the character before cursor
+                    let char_indices: Vec<_> = self.edit_text.char_indices().collect();
+                    if let Some(&(byte_pos, _)) = char_indices.get(self.edit_cursor - 1) {
+                        // Find the next character's byte position (or end of string)
+                        let next_byte_pos = char_indices
+                            .get(self.edit_cursor)
+                            .map(|(pos, _)| *pos)
+                            .unwrap_or(self.edit_text.len());
+
+                        // Remove the character by removing the range
+                        self.edit_text.drain(byte_pos..next_byte_pos);
+                        self.edit_cursor -= 1;
+                    }
                 }
             }
             KeyCode::Delete => {
-                if self.edit_cursor < self.edit_text.len() {
-                    self.edit_text.remove(self.edit_cursor);
+                if self.edit_cursor < self.edit_text.chars().count() {
+                    // Find the byte positions of current and next character
+                    let char_indices: Vec<_> = self.edit_text.char_indices().collect();
+                    if let Some(&(byte_pos, _)) = char_indices.get(self.edit_cursor) {
+                        // Find the next character's byte position (or end of string)
+                        let next_byte_pos = char_indices
+                            .get(self.edit_cursor + 1)
+                            .map(|(pos, _)| *pos)
+                            .unwrap_or(self.edit_text.len());
+
+                        // Remove the character by removing the range
+                        self.edit_text.drain(byte_pos..next_byte_pos);
+                    }
                 }
             }
             KeyCode::Home => {
                 self.edit_cursor = 0;
             }
             KeyCode::End => {
-                self.edit_cursor = self.edit_text.len();
+                self.edit_cursor = self.edit_text.chars().count();
             }
             KeyCode::Char(c) => {
-                self.edit_text.insert(self.edit_cursor, c);
+                // Convert character position to byte position for insertion
+                let byte_pos = self
+                    .edit_text
+                    .char_indices()
+                    .nth(self.edit_cursor)
+                    .map(|(pos, _)| pos)
+                    .unwrap_or(self.edit_text.len());
+
+                self.edit_text.insert(byte_pos, c);
                 self.edit_cursor += 1;
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn handle_delete_mode_key(&mut self, key: KeyCode) -> Result<(), Box<dyn Error>> {
+        match key {
+            KeyCode::Char('y') => {
+                // Confirm delete
+                if !self.todo_list.items.is_empty()
+                    && self.selected_index < self.todo_list.items.len()
+                {
+                    self.todo_list.items.remove(self.selected_index);
+
+                    // Adjust selected index if necessary
+                    if self.selected_index >= self.todo_list.items.len()
+                        && !self.todo_list.items.is_empty()
+                    {
+                        self.selected_index = self.todo_list.items.len() - 1;
+                    }
+
+                    self.save_todo_list()?;
+                }
+                self.mode = AppMode::Selection;
+            }
+            KeyCode::Esc => {
+                // Cancel delete
+                self.mode = AppMode::Selection;
             }
             _ => {}
         }
@@ -413,9 +508,13 @@ fn wrap_todo_item_text(
 
     let text = if is_editing && is_selected {
         let mut display_text = edit_text.to_string();
-        if edit_cursor <= display_text.len() {
-            display_text.insert(edit_cursor, '|');
-        }
+        // Insert cursor at character position, not byte position
+        let byte_pos = edit_text
+            .char_indices()
+            .nth(edit_cursor)
+            .map(|(pos, _)| pos)
+            .unwrap_or(edit_text.len());
+        display_text.insert(byte_pos, '|');
         display_text
     } else {
         item.text.clone()
@@ -522,6 +621,7 @@ fn ui(f: &mut Frame, app: &App) {
         for (logical_index, item) in app.todo_list.items.iter().enumerate() {
             let is_selected = logical_index == app.selected_index;
             let is_editing = app.mode == AppMode::Edit && is_selected;
+            let is_delete_mode = app.mode == AppMode::Delete && is_selected;
 
             let wrapped_lines = wrap_todo_item_text(
                 item,
@@ -536,7 +636,9 @@ fn ui(f: &mut Frame, app: &App) {
             let mut display_indices = Vec::new();
 
             for (line_index, (line_text, is_main_line)) in wrapped_lines.iter().enumerate() {
-                let style = if is_selected && *is_main_line {
+                let style = if is_delete_mode && *is_main_line {
+                    Style::default().bg(Color::Red).fg(Color::White)
+                } else if is_selected && *is_main_line {
                     Style::default().bg(Color::DarkGray).fg(Color::White)
                 } else if item.completed {
                     Style::default().fg(Color::DarkGray)
@@ -550,15 +652,21 @@ fn ui(f: &mut Frame, app: &App) {
 
             logical_to_display_map.push(display_indices);
         }
+
+        // Add a virtual item for insertion past the last item
+        if app.selected_index == app.todo_list.items.len() {
+            let style = Style::default().bg(Color::DarkGray).fg(Color::Yellow);
+            display_items.push(ListItem::new("--- Insert new item here ---").style(style));
+            logical_to_display_map.push(vec![display_items.len() - 1]);
+        }
     }
 
     // Calculate which display item should be selected
-    let selected_display_index =
-        if !app.todo_list.items.is_empty() && app.selected_index < logical_to_display_map.len() {
-            logical_to_display_map[app.selected_index].first().copied()
-        } else {
-            None
-        };
+    let selected_display_index = if app.selected_index < logical_to_display_map.len() {
+        logical_to_display_map[app.selected_index].first().copied()
+    } else {
+        None
+    };
 
     let todo_list = List::new(display_items)
         .block(Block::default().borders(Borders::ALL).title(title))
@@ -575,10 +683,11 @@ fn ui(f: &mut Frame, app: &App) {
             if app.todo_list.items.is_empty() {
                 "Sel | i:Insert | q:Quit"
             } else {
-                "Sel | ↑k:Up | ↓j:Down | x:Toggle | i:Insert | Enter:Edit | q:Quit"
+                "Sel | ↑k:Up | ↓j:Down | x:Toggle | i:Insert | Enter:Edit | Tab:Indent | Shift+Tab:Unindent | d:Delete | q:Quit"
             }
         }
         AppMode::Edit => "Edit | Enter:Confirm | Esc:Cancel | ←→:Move cursor",
+        AppMode::Delete => "Delete | y:Confirm Delete | Esc:Cancel",
     };
 
     let status_paragraph =
@@ -777,5 +886,419 @@ mod tests {
         assert!(wrapped.len() > 1);
         assert!(wrapped[0].0.contains("|")); // Should contain cursor
         assert!(wrapped[0].0.starts_with("* [ ] Edited"));
+    }
+
+    #[test]
+    fn test_todo_item_indentation() {
+        let mut item = TodoItem::new("test item".to_string(), false, 0);
+        assert_eq!(item.indent_level, 0);
+
+        // Test increasing indentation
+        item.indent_level += 1;
+        assert_eq!(item.indent_level, 1);
+        assert_eq!(item.to_markdown_line(), "  * [ ] test item");
+
+        item.indent_level += 1;
+        assert_eq!(item.indent_level, 2);
+        assert_eq!(item.to_markdown_line(), "    * [ ] test item");
+
+        // Test decreasing indentation
+        item.indent_level -= 1;
+        assert_eq!(item.indent_level, 1);
+        assert_eq!(item.to_markdown_line(), "  * [ ] test item");
+    }
+
+    #[test]
+    fn test_inherit_indentation_from_previous_item() {
+        let date = NaiveDate::from_ymd_opt(2025, 8, 14).unwrap();
+        let mut todo_list = TodoList::new(date);
+
+        // Add first item at level 0
+        todo_list
+            .items
+            .push(TodoItem::new("First item".to_string(), false, 0));
+
+        // Add second item at level 1
+        todo_list
+            .items
+            .push(TodoItem::new("Second item".to_string(), false, 1));
+
+        // Add third item at level 2
+        todo_list
+            .items
+            .push(TodoItem::new("Third item".to_string(), false, 2));
+
+        // Test that new items inherit indentation
+        assert_eq!(todo_list.items[0].indent_level, 0);
+        assert_eq!(todo_list.items[1].indent_level, 1);
+        assert_eq!(todo_list.items[2].indent_level, 2);
+
+        let markdown = todo_list.to_markdown();
+        assert!(markdown.contains("* [ ] First item"));
+        assert!(markdown.contains("  * [ ] Second item"));
+        assert!(markdown.contains("    * [ ] Third item"));
+    }
+
+    #[test]
+    fn test_delete_mode_transitions() {
+        let date = NaiveDate::from_ymd_opt(2025, 8, 14).unwrap();
+        let mut todo_list = TodoList::new(date);
+        todo_list
+            .items
+            .push(TodoItem::new("Test item".to_string(), false, 0));
+
+        let mut app = App {
+            todo_list,
+            selected_index: 0,
+            mode: AppMode::Selection,
+            edit_text: String::new(),
+            edit_cursor: 0,
+            config_dir: std::path::PathBuf::new(),
+            _lock_file: tempfile::tempfile().unwrap(),
+            should_quit: false,
+        };
+
+        // Test entering delete mode
+        assert_eq!(app.mode, AppMode::Selection);
+        app.handle_key_event(KeyCode::Char('d')).unwrap();
+        assert_eq!(app.mode, AppMode::Delete);
+
+        // Test canceling delete
+        app.handle_key_event(KeyCode::Esc).unwrap();
+        assert_eq!(app.mode, AppMode::Selection);
+        assert_eq!(app.todo_list.items.len(), 1); // Item should still exist
+    }
+
+    #[test]
+    fn test_delete_confirmation() {
+        let date = NaiveDate::from_ymd_opt(2025, 8, 14).unwrap();
+        let mut todo_list = TodoList::new(date);
+        todo_list
+            .items
+            .push(TodoItem::new("Item 1".to_string(), false, 0));
+        todo_list
+            .items
+            .push(TodoItem::new("Item 2".to_string(), false, 0));
+
+        let mut app = App {
+            todo_list,
+            selected_index: 0,
+            mode: AppMode::Selection,
+            edit_text: String::new(),
+            edit_cursor: 0,
+            config_dir: std::path::PathBuf::new(),
+            _lock_file: tempfile::tempfile().unwrap(),
+            should_quit: false,
+        };
+
+        // Enter delete mode and confirm delete
+        assert_eq!(app.todo_list.items.len(), 2);
+        app.handle_key_event(KeyCode::Char('d')).unwrap();
+        assert_eq!(app.mode, AppMode::Delete);
+
+        app.handle_key_event(KeyCode::Char('y')).unwrap();
+        assert_eq!(app.mode, AppMode::Selection);
+        assert_eq!(app.todo_list.items.len(), 1); // One item should be deleted
+        assert_eq!(app.todo_list.items[0].text, "Item 2"); // Remaining item should be "Item 2"
+    }
+
+    #[test]
+    fn test_delete_last_item_adjusts_selection() {
+        let date = NaiveDate::from_ymd_opt(2025, 8, 14).unwrap();
+        let mut todo_list = TodoList::new(date);
+        todo_list
+            .items
+            .push(TodoItem::new("Only item".to_string(), false, 0));
+
+        let mut app = App {
+            todo_list,
+            selected_index: 0,
+            mode: AppMode::Selection,
+            edit_text: String::new(),
+            edit_cursor: 0,
+            config_dir: std::path::PathBuf::new(),
+            _lock_file: tempfile::tempfile().unwrap(),
+            should_quit: false,
+        };
+
+        // Delete the only item
+        app.handle_key_event(KeyCode::Char('d')).unwrap();
+        app.handle_key_event(KeyCode::Char('y')).unwrap();
+
+        assert_eq!(app.todo_list.items.len(), 0);
+        assert_eq!(app.selected_index, 0); // Should be 0 when no items
+    }
+
+    #[test]
+    fn test_delete_adjusts_selection_when_deleting_last_item() {
+        let date = NaiveDate::from_ymd_opt(2025, 8, 14).unwrap();
+        let mut todo_list = TodoList::new(date);
+        todo_list
+            .items
+            .push(TodoItem::new("Item 1".to_string(), false, 0));
+        todo_list
+            .items
+            .push(TodoItem::new("Item 2".to_string(), false, 0));
+        todo_list
+            .items
+            .push(TodoItem::new("Item 3".to_string(), false, 0));
+
+        let mut app = App {
+            todo_list,
+            selected_index: 2, // Select the last item
+            mode: AppMode::Selection,
+            edit_text: String::new(),
+            edit_cursor: 0,
+            config_dir: std::path::PathBuf::new(),
+            _lock_file: tempfile::tempfile().unwrap(),
+            should_quit: false,
+        };
+
+        // Delete the last item
+        app.handle_key_event(KeyCode::Char('d')).unwrap();
+        app.handle_key_event(KeyCode::Char('y')).unwrap();
+
+        assert_eq!(app.todo_list.items.len(), 2);
+        assert_eq!(app.selected_index, 1); // Should move to previous item
+        assert_eq!(app.todo_list.items[1].text, "Item 2");
+    }
+
+    #[test]
+    fn test_edit_mode_enter_key_confirms_changes() {
+        let date = NaiveDate::from_ymd_opt(2025, 8, 14).unwrap();
+        let mut todo_list = TodoList::new(date);
+        todo_list
+            .items
+            .push(TodoItem::new("Original text".to_string(), false, 0));
+
+        let mut app = App {
+            todo_list,
+            selected_index: 0,
+            mode: AppMode::Selection,
+            edit_text: String::new(),
+            edit_cursor: 0,
+            config_dir: std::path::PathBuf::new(),
+            _lock_file: tempfile::tempfile().unwrap(),
+            should_quit: false,
+        };
+
+        // Enter edit mode
+        app.handle_key_event(KeyCode::Enter).unwrap();
+        assert_eq!(app.mode, AppMode::Edit);
+
+        // Simulate typing some text
+        app.edit_text = "Modified text".to_string();
+        app.edit_cursor = app.edit_text.chars().count();
+
+        // Confirm with Enter key
+        app.handle_key_event(KeyCode::Enter).unwrap();
+
+        // Should return to selection mode and save changes
+        assert_eq!(app.mode, AppMode::Selection);
+        assert_eq!(app.todo_list.items[0].text, "Modified text");
+    }
+
+    #[test]
+    fn test_enter_key_at_virtual_insertion_point() {
+        let date = NaiveDate::from_ymd_opt(2025, 8, 14).unwrap();
+        let mut todo_list = TodoList::new(date);
+        todo_list
+            .items
+            .push(TodoItem::new("Existing item".to_string(), false, 0));
+
+        let mut app = App {
+            todo_list,
+            selected_index: 1, // At virtual insertion point (past last item)
+            mode: AppMode::Selection,
+            edit_text: String::new(),
+            edit_cursor: 0,
+            config_dir: std::path::PathBuf::new(),
+            _lock_file: tempfile::tempfile().unwrap(),
+            should_quit: false,
+        };
+
+        // Try to enter edit mode from virtual insertion point
+        app.handle_key_event(KeyCode::Enter).unwrap();
+
+        // Should not enter edit mode (this might be the bug)
+        assert_eq!(app.mode, AppMode::Selection);
+        assert_eq!(app.todo_list.items.len(), 1);
+    }
+
+    #[test]
+    fn test_insert_edit_confirm_workflow() {
+        let date = NaiveDate::from_ymd_opt(2025, 8, 14).unwrap();
+        let mut todo_list = TodoList::new(date);
+        todo_list
+            .items
+            .push(TodoItem::new("Existing item".to_string(), false, 0));
+
+        let mut app = App {
+            todo_list,
+            selected_index: 1, // At virtual insertion point (past last item)
+            mode: AppMode::Selection,
+            edit_text: String::new(),
+            edit_cursor: 0,
+            config_dir: std::path::PathBuf::new(),
+            _lock_file: tempfile::tempfile().unwrap(),
+            should_quit: false,
+        };
+
+        // Insert new item with 'i'
+        app.handle_key_event(KeyCode::Char('i')).unwrap();
+        assert_eq!(app.mode, AppMode::Edit);
+        assert_eq!(app.todo_list.items.len(), 2);
+        assert_eq!(app.selected_index, 1);
+
+        // Type some text
+        app.handle_key_event(KeyCode::Char('N')).unwrap();
+        app.handle_key_event(KeyCode::Char('e')).unwrap();
+        app.handle_key_event(KeyCode::Char('w')).unwrap();
+        assert_eq!(app.edit_text, "New");
+
+        // Confirm with Enter - this is where the bug might be
+        app.handle_key_event(KeyCode::Enter).unwrap();
+
+        // Should return to selection mode and save the text
+        assert_eq!(app.mode, AppMode::Selection);
+        assert_eq!(app.todo_list.items.len(), 2);
+        assert_eq!(app.todo_list.items[1].text, "New");
+    }
+
+    #[test]
+    fn test_edit_mode_enter_key_bounds_check() {
+        let date = NaiveDate::from_ymd_opt(2025, 8, 14).unwrap();
+        let mut todo_list = TodoList::new(date);
+        todo_list
+            .items
+            .push(TodoItem::new("Test item".to_string(), false, 0));
+
+        let mut app = App {
+            todo_list,
+            selected_index: 5, // Invalid index - way past items.len()
+            mode: AppMode::Edit,
+            edit_text: "Modified text".to_string(),
+            edit_cursor: 13, // Character count, not byte count
+            config_dir: std::path::PathBuf::new(),
+            _lock_file: tempfile::tempfile().unwrap(),
+            should_quit: false,
+        };
+
+        // Try to confirm changes with invalid index
+        app.handle_key_event(KeyCode::Enter).unwrap();
+
+        // Should exit edit mode but not save changes due to bounds check
+        assert_eq!(app.mode, AppMode::Selection);
+        assert_eq!(app.todo_list.items[0].text, "Test item"); // Original text unchanged
+    }
+
+    #[test]
+    fn test_unicode_character_handling() {
+        let date = NaiveDate::from_ymd_opt(2025, 8, 14).unwrap();
+        let mut todo_list = TodoList::new(date);
+        todo_list
+            .items
+            .push(TodoItem::new("Test".to_string(), false, 0));
+
+        let mut app = App {
+            todo_list,
+            selected_index: 0,
+            mode: AppMode::Edit,
+            edit_text: "Hallo".to_string(),
+            edit_cursor: 5,
+            config_dir: std::path::PathBuf::new(),
+            _lock_file: tempfile::tempfile().unwrap(),
+            should_quit: false,
+        };
+
+        // Insert German umlaut ü at the end
+        app.handle_key_event(KeyCode::Char('ü')).unwrap();
+        assert_eq!(app.edit_text, "Halloü");
+        assert_eq!(app.edit_cursor, 6);
+
+        // Move cursor to position 2 (between 'a' and 'l')
+        app.edit_cursor = 2;
+
+        // Insert another unicode character
+        app.handle_key_event(KeyCode::Char('ö')).unwrap();
+        assert_eq!(app.edit_text, "Haölloü");
+        assert_eq!(app.edit_cursor, 3);
+    }
+
+    #[test]
+    fn test_unicode_backspace_and_delete() {
+        let date = NaiveDate::from_ymd_opt(2025, 8, 14).unwrap();
+        let mut todo_list = TodoList::new(date);
+        todo_list
+            .items
+            .push(TodoItem::new("Test".to_string(), false, 0));
+
+        let mut app = App {
+            todo_list,
+            selected_index: 0,
+            mode: AppMode::Edit,
+            edit_text: "Hällö Wörld".to_string(), // Contains umlauts
+            edit_cursor: 5,                       // After the ö in "Hällö"
+            config_dir: std::path::PathBuf::new(),
+            _lock_file: tempfile::tempfile().unwrap(),
+            should_quit: false,
+        };
+
+        // Test backspace on unicode character (should remove 'ö')
+        app.handle_key_event(KeyCode::Backspace).unwrap();
+        assert_eq!(app.edit_text, "Häll Wörld");
+        assert_eq!(app.edit_cursor, 4);
+
+        // Move cursor to position after 'ö' in "Wörld" (character position 7)
+        app.edit_cursor = 7; // After 'ö' in "Wörld"
+
+        // Test delete on unicode character (should remove 'r')
+        app.handle_key_event(KeyCode::Delete).unwrap();
+        assert_eq!(app.edit_text, "Häll Wöld");
+        assert_eq!(app.edit_cursor, 7);
+    }
+
+    #[test]
+    fn test_unicode_cursor_movement() {
+        let date = NaiveDate::from_ymd_opt(2025, 8, 14).unwrap();
+        let mut todo_list = TodoList::new(date);
+        todo_list
+            .items
+            .push(TodoItem::new("Test".to_string(), false, 0));
+
+        let mut app = App {
+            todo_list,
+            selected_index: 0,
+            mode: AppMode::Edit,
+            edit_text: "Ümlaut test".to_string(), // Starts with umlaut
+            edit_cursor: 0,
+            config_dir: std::path::PathBuf::new(),
+            _lock_file: tempfile::tempfile().unwrap(),
+            should_quit: false,
+        };
+
+        // Move right from start (should move past 'Ü')
+        app.handle_key_event(KeyCode::Right).unwrap();
+        assert_eq!(app.edit_cursor, 1);
+
+        // Move to end
+        app.handle_key_event(KeyCode::End).unwrap();
+        assert_eq!(app.edit_cursor, app.edit_text.chars().count());
+
+        // Move to home
+        app.handle_key_event(KeyCode::Home).unwrap();
+        assert_eq!(app.edit_cursor, 0);
+    }
+
+    #[test]
+    fn test_unicode_display_with_cursor() {
+        let item = TodoItem::new("Test".to_string(), false, 0);
+        let edit_text = "Hallö";
+        let edit_cursor = 4; // After 'l', before 'ö'
+
+        let wrapped = wrap_todo_item_text(&item, 50, true, edit_text, edit_cursor, true);
+
+        assert_eq!(wrapped.len(), 1);
+        assert!(wrapped[0].0.contains("Hall|ö")); // Cursor should be positioned correctly
     }
 }

@@ -57,6 +57,7 @@ The context is determined by the current application mode. Here is a list of mod
 |----- |------------|-------------|
 | Selection Mode |Sel | In this mode the user can highlight TODO items. By default, the first TODO item is highlighted. The highlighted item is shown in inverted text |
 | Edit Mode | Edit | The todo text of the highlighted item is currently being edited by the user |
+| Delete Mode | Delete | The highlighted item is about to be deleted |
 
 
 A list of commands and in which modes they are available:
@@ -64,13 +65,17 @@ A list of commands and in which modes they are available:
 | Mode short name | Command | Keys | effect |
 |-----|----|----|----|
 | Sel | Highlight previous item | <cursor up>, `k` | moves the highlight to the todo item above |
-| Sel | Highlight next item | <cursor up>, `j` | moves the highlight to the todo item below |
+| Sel | Highlight next item | <cursor up>, `j` | moves the highlight to the todo item below. The highlight can move one element past the last item (this is to allow insertions after the last item). |
 | Sel | Quit | `q` | terminates application |
 | Sel | Toggle complete | `x` | Toggles the check box to change the state of the TODO item (complete / incomplete). Triggers saving the TODO list file |
-| Sel | Insert | `i` | inserts a new, unchecked TODO item with blank text and enters Edit Mode |
+| Sel | Insert | `i` | inserts a new, unchecked TODO item with blank text and enters Edit Mode. The new item has the same indentation as the item before it, if one exists, otherwise it has the outermost indentation |
 | Sel | Edit | <enter> | enters Edit Mode to edit the currently highlighted TODO item |
-| Edit | Cancel | <esc> | Cancels edit mode, discarding any changes to the TODO item text. Changes to Selection Mode |
-| Edit | Confirm | <enter> | Confirm changes to the TODO text. Triggers saving the TODO list file. Changes to Selection Mode |
+| Sel | Indent | <tab> | Intents the currently highlighted TODO item by one level |
+| Sel | Unindent | <shift>+<tab> | Unindent the currently highlighted TODO item by one level | Sel | Delete | `d` | Enter Delete mode for highlighted entry |
+| Del | Confirm Delete | `y` | The highlighted element is deleted. Changes back to Selection Mode |
+| Del | Cancel Delete | <esc> | Changes back to Selection mode without deleting the item |
+| Edit | Cancel | <esc> | Cancels edit mode, discarding any changes to the TODO item text. Changes back to Selection Mode |
+| Edit | Confirm | <enter> | Confirm changes to the TODO text. Triggers saving the TODO list file. Changes back to Selection Mode |
 | Edit | Change TODO item text | any other key | Changes the edit item text - so entering keys will enter text, the cursor left/right keys will move the text editing cursor, as expected. Any key that is not bound to another command in edit mode will cause text to be entered (except for keys that result in non-printable characters, those are ignored) |
 
 
