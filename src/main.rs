@@ -1,4 +1,5 @@
 use chrono::{Local, NaiveDate};
+use clap::Parser;
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind},
     execute,
@@ -18,6 +19,16 @@ use std::{
     path::PathBuf,
     process,
 };
+
+slint::include_modules!();
+
+#[derive(Parser)]
+#[command(author, version, about, long_about = None)]
+struct Args {
+    /// Start with graphical user interface
+    #[arg(long)]
+    gui: bool,
+}
 
 #[derive(Debug, Clone)]
 struct TodoItem {
@@ -141,22 +152,8 @@ struct App {
 }
 
 impl App {
-    fn new() -> Result<Self, Box<dyn Error>> {
-        let config_dir = Self::get_config_dir()?;
-
-        // Create config directory if it doesn't exist
-        if !config_dir.exists() {
-            fs::create_dir_all(&config_dir)?;
-        }
-
-        // Create and hold lock file
-        let lock_file = Self::create_lock_file(&config_dir)?;
-
-        // Load or create today's todo list
-        let today = Local::now().date_naive();
-        let todo_list = Self::load_or_create_todo_list(&config_dir, today)?;
-
-        Ok(App {
+    fn new(config_dir: PathBuf, lock_file: File, todo_list: TodoList) -> Self {
+        App {
             selected_index: 0,
             mode: AppMode::Selection,
             edit_text: String::new(),
@@ -165,88 +162,6 @@ impl App {
             _lock_file: lock_file,
             should_quit: false,
             todo_list,
-        })
-    }
-
-    fn get_config_dir() -> Result<PathBuf, Box<dyn Error>> {
-        let home_dir = dirs::home_dir().ok_or("Unable to find home directory")?;
-        Ok(home_dir.join(".todui"))
-    }
-
-    fn create_lock_file(config_dir: &PathBuf) -> Result<File, Box<dyn Error>> {
-        let lock_path = config_dir.join("lockfile");
-
-        if lock_path.exists() {
-            return Err(format!(
-                "Another instance of todui appears to be running. Lock file exists at: {}",
-                lock_path.display()
-            )
-            .into());
-        }
-
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&lock_path)?;
-
-        let pid = process::id();
-        writeln!(file, "{}", pid)?;
-        file.flush()?;
-
-        Ok(file)
-    }
-
-    fn load_or_create_todo_list(
-        config_dir: &PathBuf,
-        target_date: NaiveDate,
-    ) -> Result<TodoList, Box<dyn Error>> {
-        // Find the newest todo file that's not in the future
-        let mut newest_file: Option<(NaiveDate, PathBuf)> = None;
-
-        if let Ok(entries) = fs::read_dir(config_dir) {
-            for entry in entries {
-                if let Ok(entry) = entry {
-                    let path = entry.path();
-                    if let Some(file_name) = path.file_name().and_then(|n| n.to_str()) {
-                        if file_name.starts_with("TODO-") && file_name.ends_with(".md") {
-                            let date_part = file_name
-                                .strip_prefix("TODO-")
-                                .unwrap()
-                                .strip_suffix(".md")
-                                .unwrap();
-
-                            if let Ok(file_date) = NaiveDate::parse_from_str(date_part, "%Y-%m-%d")
-                            {
-                                if file_date <= target_date {
-                                    if newest_file.is_none()
-                                        || file_date > newest_file.as_ref().unwrap().0
-                                    {
-                                        newest_file = Some((file_date, path));
-                                    }
-                                } else {
-                                    eprintln!(
-                                        "Warning: Found todo file with future date: {}",
-                                        file_name
-                                    );
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        if let Some((file_date, path)) = newest_file {
-            let content = fs::read_to_string(&path)?;
-            let mut todo_list = TodoList::from_markdown(&content)?;
-            // Update the date to current date if it's different
-            if file_date != target_date {
-                todo_list.date = target_date;
-            }
-            Ok(todo_list)
-        } else {
-            // Create new todo list for today
-            Ok(TodoList::new(target_date))
         }
     }
 
@@ -716,7 +631,235 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, mut app: App) 
     Ok(())
 }
 
-fn main() -> Result<(), Box<dyn Error>> {
+// Shared core for both TUI and GUI
+struct TodoApp {
+    todo_list: TodoList,
+    config_dir: PathBuf,
+    _lock_file: File,
+}
+
+impl TodoApp {
+    fn new(config_dir: PathBuf, lock_file: File, todo_list: TodoList) -> Self {
+        TodoApp {
+            todo_list,
+            config_dir,
+            _lock_file: lock_file,
+        }
+    }
+
+    fn save_todo_list(&mut self) -> Result<(), Box<dyn Error>> {
+        // Update date to current date if needed
+        let current_date = Local::now().date_naive();
+        if self.todo_list.date != current_date {
+            self.todo_list.date = current_date;
+        }
+
+        // Save to file
+        let filename = self.config_dir.join(self.todo_list.filename());
+        fs::write(filename, self.todo_list.to_markdown())?;
+        Ok(())
+    }
+
+    fn toggle_item_completed(&mut self, index: usize) -> Result<(), Box<dyn Error>> {
+        if index < self.todo_list.items.len() {
+            self.todo_list.items[index].completed = !self.todo_list.items[index].completed;
+            self.save_todo_list()?;
+        }
+        Ok(())
+    }
+
+    fn update_item_text(&mut self, index: usize, text: String) -> Result<(), Box<dyn Error>> {
+        if index < self.todo_list.items.len() {
+            self.todo_list.items[index].text = text;
+            self.save_todo_list()?;
+        }
+        Ok(())
+    }
+
+    fn indent_item_left(&mut self, index: usize) -> Result<(), Box<dyn Error>> {
+        if index < self.todo_list.items.len() && self.todo_list.items[index].indent_level > 0 {
+            self.todo_list.items[index].indent_level -= 1;
+            self.save_todo_list()?;
+        }
+        Ok(())
+    }
+
+    fn indent_item_right(&mut self, index: usize) -> Result<(), Box<dyn Error>> {
+        if index < self.todo_list.items.len() {
+            self.todo_list.items[index].indent_level += 1;
+            self.save_todo_list()?;
+        }
+        Ok(())
+    }
+
+    fn delete_item(&mut self, index: usize) -> Result<(), Box<dyn Error>> {
+        if index < self.todo_list.items.len() {
+            self.todo_list.items.remove(index);
+            self.save_todo_list()?;
+        }
+        Ok(())
+    }
+
+    fn add_new_item(&mut self) -> Result<(), Box<dyn Error>> {
+        let indent_level = if let Some(last_item) = self.todo_list.items.last() {
+            last_item.indent_level
+        } else {
+            0
+        };
+
+        let new_item = TodoItem::new(String::new(), false, indent_level);
+        self.todo_list.items.push(new_item);
+        self.save_todo_list()?;
+        Ok(())
+    }
+}
+
+impl Drop for TodoApp {
+    fn drop(&mut self) {
+        let _ = self.save_todo_list();
+    }
+}
+
+fn run_gui(todo_app: TodoApp) -> Result<(), Box<dyn Error>> {
+    let ui = AppWindow::new()?;
+
+    // Set initial title
+    let title = format!("TODO {}", todo_app.todo_list.date.format("%Y-%m-%d"));
+    ui.set_window_title(title.into());
+
+    // Convert TodoItems to TodoItemData for Slint
+    let convert_items = |items: &[TodoItem]| -> Vec<TodoItemData> {
+        items
+            .iter()
+            .map(|item| TodoItemData {
+                text: item.text.clone().into(),
+                completed: item.completed,
+                indent_level: item.indent_level as i32,
+            })
+            .collect()
+    };
+
+    // Set initial items
+    let initial_items: slint::ModelRc<TodoItemData> = slint::ModelRc::new(slint::VecModel::from(
+        convert_items(&todo_app.todo_list.items),
+    ));
+    ui.set_todo_items(initial_items.clone());
+
+    // Setup callbacks
+    let ui_weak = ui.as_weak();
+    let todo_app_rc = std::rc::Rc::new(std::cell::RefCell::new(todo_app));
+
+    // Toggle completed callback
+    {
+        let todo_app_rc = todo_app_rc.clone();
+        let ui_weak = ui_weak.clone();
+        ui.on_toggle_item_completed(move |index| {
+            if let Ok(mut app) = todo_app_rc.try_borrow_mut() {
+                let _ = app.toggle_item_completed(index as usize);
+                if let Some(ui) = ui_weak.upgrade() {
+                    let items: slint::ModelRc<TodoItemData> = slint::ModelRc::new(
+                        slint::VecModel::from(convert_items(&app.todo_list.items)),
+                    );
+                    ui.set_todo_items(items);
+                }
+            }
+        });
+    }
+
+    // Text changed callback
+    {
+        let todo_app_rc = todo_app_rc.clone();
+        let ui_weak = ui_weak.clone();
+        ui.on_item_text_changed(move |index, text| {
+            if let Ok(mut app) = todo_app_rc.try_borrow_mut() {
+                let _ = app.update_item_text(index as usize, text.to_string());
+                if let Some(ui) = ui_weak.upgrade() {
+                    let items: slint::ModelRc<TodoItemData> = slint::ModelRc::new(
+                        slint::VecModel::from(convert_items(&app.todo_list.items)),
+                    );
+                    ui.set_todo_items(items);
+                }
+            }
+        });
+    }
+
+    // Indent left callback
+    {
+        let todo_app_rc = todo_app_rc.clone();
+        let ui_weak = ui_weak.clone();
+        ui.on_indent_item_left(move |index| {
+            if let Ok(mut app) = todo_app_rc.try_borrow_mut() {
+                let _ = app.indent_item_left(index as usize);
+                if let Some(ui) = ui_weak.upgrade() {
+                    let items: slint::ModelRc<TodoItemData> = slint::ModelRc::new(
+                        slint::VecModel::from(convert_items(&app.todo_list.items)),
+                    );
+                    ui.set_todo_items(items);
+                }
+            }
+        });
+    }
+
+    // Indent right callback
+    {
+        let todo_app_rc = todo_app_rc.clone();
+        let ui_weak = ui_weak.clone();
+        ui.on_indent_item_right(move |index| {
+            if let Ok(mut app) = todo_app_rc.try_borrow_mut() {
+                let _ = app.indent_item_right(index as usize);
+                if let Some(ui) = ui_weak.upgrade() {
+                    let items: slint::ModelRc<TodoItemData> = slint::ModelRc::new(
+                        slint::VecModel::from(convert_items(&app.todo_list.items)),
+                    );
+                    ui.set_todo_items(items);
+                }
+            }
+        });
+    }
+
+    // Delete item callback
+    {
+        let todo_app_rc = todo_app_rc.clone();
+        let ui_weak = ui_weak.clone();
+        ui.on_delete_item(move |index| {
+            if let Ok(mut app) = todo_app_rc.try_borrow_mut() {
+                let _ = app.delete_item(index as usize);
+                if let Some(ui) = ui_weak.upgrade() {
+                    let items: slint::ModelRc<TodoItemData> = slint::ModelRc::new(
+                        slint::VecModel::from(convert_items(&app.todo_list.items)),
+                    );
+                    ui.set_todo_items(items);
+                }
+            }
+        });
+    }
+
+    // Add new item callback
+    {
+        let todo_app_rc = todo_app_rc.clone();
+        let ui_weak = ui_weak.clone();
+        ui.on_add_new_item(move || {
+            if let Ok(mut app) = todo_app_rc.try_borrow_mut() {
+                let _ = app.add_new_item();
+                if let Some(ui) = ui_weak.upgrade() {
+                    let items: slint::ModelRc<TodoItemData> = slint::ModelRc::new(
+                        slint::VecModel::from(convert_items(&app.todo_list.items)),
+                    );
+                    ui.set_todo_items(items);
+                }
+            }
+        });
+    }
+
+    ui.run()?;
+    Ok(())
+}
+
+fn run_tui(
+    config_dir: PathBuf,
+    lock_file: File,
+    todo_list: TodoList,
+) -> Result<(), Box<dyn Error>> {
     // Setup terminal
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -725,16 +868,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut terminal = Terminal::new(backend)?;
 
     // Create app
-    let app = App::new().map_err(|e| {
-        // Clean up terminal before showing error
-        let _ = disable_raw_mode();
-        let _ = execute!(
-            terminal.backend_mut(),
-            LeaveAlternateScreen,
-            DisableMouseCapture
-        );
-        e
-    })?;
+    let app = App::new(config_dir, lock_file, todo_list);
 
     // Run the app
     let res = run_app(&mut terminal, app);
@@ -754,9 +888,117 @@ fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+fn get_config_dir() -> Result<PathBuf, Box<dyn Error>> {
+    let home_dir = dirs::home_dir().ok_or("Unable to find home directory")?;
+    Ok(home_dir.join(".todui"))
+}
+
+fn create_lock_file(config_dir: &PathBuf) -> Result<File, Box<dyn Error>> {
+    let lock_path = config_dir.join("lockfile");
+
+    if lock_path.exists() {
+        return Err(format!(
+            "Another instance of todui appears to be running. Lock file exists at: {}",
+            lock_path.display()
+        )
+        .into());
+    }
+
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&lock_path)?;
+
+    let pid = process::id();
+    writeln!(file, "{}", pid)?;
+    file.flush()?;
+
+    Ok(file)
+}
+
+fn load_or_create_todo_list(
+    config_dir: &PathBuf,
+    target_date: NaiveDate,
+) -> Result<TodoList, Box<dyn Error>> {
+    // Find the newest todo file that's not in the future
+    let mut newest_file: Option<(NaiveDate, PathBuf)> = None;
+
+    if let Ok(entries) = fs::read_dir(config_dir) {
+        for entry in entries {
+            if let Ok(entry) = entry {
+                let path = entry.path();
+                if let Some(file_name) = path.file_name().and_then(|n| n.to_str()) {
+                    if file_name.starts_with("TODO-") && file_name.ends_with(".md") {
+                        let date_part = file_name
+                            .strip_prefix("TODO-")
+                            .unwrap()
+                            .strip_suffix(".md")
+                            .unwrap();
+
+                        if let Ok(file_date) = NaiveDate::parse_from_str(date_part, "%Y-%m-%d") {
+                            if file_date <= target_date {
+                                if newest_file.is_none()
+                                    || file_date > newest_file.as_ref().unwrap().0
+                                {
+                                    newest_file = Some((file_date, path));
+                                }
+                            } else {
+                                eprintln!(
+                                    "Warning: Found todo file with future date: {}",
+                                    file_name
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if let Some((file_date, path)) = newest_file {
+        let content = fs::read_to_string(&path)?;
+        let mut todo_list = TodoList::from_markdown(&content)?;
+        // Update the date to current date if it's different
+        if file_date != target_date {
+            todo_list.date = target_date;
+        }
+        Ok(todo_list)
+    } else {
+        // Create new todo list for today
+        Ok(TodoList::new(target_date))
+    }
+}
+
+fn main() -> Result<(), Box<dyn Error>> {
+    let args = Args::parse();
+
+    // Common initialization
+    let config_dir = get_config_dir()?;
+
+    // Create config directory if it doesn't exist
+    if !config_dir.exists() {
+        fs::create_dir_all(&config_dir)?;
+    }
+
+    // Create and hold lock file
+    let lock_file = create_lock_file(&config_dir)?;
+
+    // Load or create today's todo list
+    let today = Local::now().date_naive();
+    let todo_list = load_or_create_todo_list(&config_dir, today)?;
+
+    if args.gui {
+        let todo_app = TodoApp::new(config_dir, lock_file, todo_list);
+        run_gui(todo_app)
+    } else {
+        run_tui(config_dir, lock_file, todo_list)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tui::{App, AppMode, wrap_todo_item_text};
     use chrono::NaiveDate;
 
     #[test]
@@ -1296,9 +1538,10 @@ mod tests {
         let edit_text = "Hallö";
         let edit_cursor = 4; // After 'l', before 'ö'
 
-        let wrapped = wrap_todo_item_text(&item, 50, true, edit_text, edit_cursor, true);
+        let wrapped = tui::wrap_todo_item_text(&item, 50, true, edit_text, edit_cursor, true);
 
         assert_eq!(wrapped.len(), 1);
-        assert!(wrapped[0].0.contains("Hall|ö")); // Cursor should be positioned correctly
+        let term = format!("Hall{}ö", tui::CURSOR);
+        assert!(wrapped[0].0.contains(&term)); // Cursor should be positioned correctly
     }
 }

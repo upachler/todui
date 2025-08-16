@@ -1,0 +1,128 @@
+import { Button, VerticalBox, HorizontalBox, LineEdit, CheckBox, ScrollView } from "std-widgets.slint";
+
+export struct TodoItemData {
+    text: string,
+    completed: bool,
+    indent-level: int,
+}
+
+export component AppWindow inherits Window {
+    in property <string> window-title: "TODO";
+    in property <[TodoItemData]> todo-items;
+
+    callback toggle-item-completed(int);
+    callback item-text-changed(int, string);
+    callback indent-item-left(int);
+    callback indent-item-right(int);
+    callback delete-item(int);
+    callback add-new-item();
+
+    title: root.window-title;
+    width: 800px;
+    height: 600px;
+
+    VerticalBox {
+        padding: 16px;
+        spacing: 16px;
+
+        // Header
+        Text {
+            text: root.window-title;
+            font-size: 24px;
+            font-weight: 700;
+            horizontal-alignment: center;
+        }
+
+        // Add new item button
+        Button {
+            text: "Add New Todo Item";
+            clicked => {
+                root.add-new-item();
+            }
+        }
+
+        // Todo items list
+        ScrollView {
+            vertical-stretch: 1;
+
+            VerticalBox {
+                spacing: 4px;
+
+                for item[index] in root.todo-items: Rectangle {
+                    height: 40px;
+                    background: Colors.white;
+                    border-width: 1px;
+                    border-color: Colors.lightgray;
+
+                    HorizontalBox {
+                        padding: 8px;
+                        spacing: 8px;
+
+                        // Indentation spacer
+                        Rectangle {
+                            width: item.indent-level * 20px;
+                        }
+
+                        // Checkbox
+                        CheckBox {
+                            checked: item.completed;
+                            toggled => {
+                                root.toggle-item-completed(index);
+                            }
+                        }
+
+                        // Text input
+                        LineEdit {
+                            text: item.text;
+                            horizontal-stretch: 1;
+                            edited(text) => {
+                                root.item-text-changed(index, text);
+                            }
+                        }
+
+                        // Indent left button
+                        Button {
+                            text: "<";
+                            width: 30px;
+                            enabled: item.indent-level > 0;
+                            clicked => {
+                                root.indent-item-left(index);
+                            }
+                        }
+
+                        // Indent right button
+                        Button {
+                            text: ">";
+                            width: 30px;
+                            clicked => {
+                                root.indent-item-right(index);
+                            }
+                        }
+
+                        // Delete button
+                        Button {
+                            text: "🗑";
+                            width: 30px;
+                            clicked => {
+                                root.delete-item(index);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Status bar
+        Rectangle {
+            height: 30px;
+            background: Colors.lightgray;
+
+            Text {
+                text: @tr("Use mouse to interact with todo items. Changes are saved automatically.");
+                vertical-alignment: center;
+                horizontal-alignment: center;
+                font-size: 12px;
+            }
+        }
+    }
+}

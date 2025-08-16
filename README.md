@@ -1,6 +1,6 @@
-# TODUI - Terminal Todo List Manager
+# TODUI - Todo List Manager
 
-A powerful terminal-based todo list application written in Rust that provides hierarchical task management with smart indentation and text wrapping.
+A powerful todo list application written in Rust that supports both terminal (TUI) and graphical (GUI) interfaces, providing hierarchical task management with smart indentation and text wrapping.
 
 ## Features
 
@@ -39,21 +39,49 @@ The binary will be available at `target/release/todui`.
 
 ## Usage
 
-Simply run the application:
+### Terminal Interface (Default)
+
+Run with the terminal interface:
 
 ```bash
 cargo run
 ```
 
+### Graphical Interface
+
+Run with the GUI interface:
+
+```bash
+cargo run -- --gui
+```
+
 Or if you built the release version:
 
 ```bash
-./target/release/todui
+./target/release/todui         # Terminal interface
+./target/release/todui --gui   # Graphical interface
 ```
 
-### Controls
+### Command Line Options
 
-#### Selection Mode (default)
+- `--gui`: Start with graphical user interface
+- `--help`: Show help message
+
+## Interface Comparison
+
+| Feature | Terminal UI | Graphical UI |
+|---------|-------------|--------------|
+| Item Selection | Modal with highlighted selection | Direct interaction with any item |
+| Text Editing | Enter edit mode with Enter key | Click to edit in-place |
+| Completion Toggle | `x` key on selected item | Click checkbox on any item |
+| Indentation | Tab/Shift+Tab on selected item | `<`/`>` buttons on any item |
+| Deletion | `d` key + confirmation | Direct click on trash button |
+| Navigation | Keyboard arrows | Mouse/scroll |
+| New Items | `i` key at selected position | "Add New Todo Item" button |
+
+## Terminal Interface Controls
+
+### Selection Mode (default)
 - `↑` or `k`: Move highlight up
 - `↓` or `j`: Move highlight down (can move past last item for insertion)
 - `x`: Toggle completion status of highlighted item
@@ -64,7 +92,7 @@ Or if you built the release version:
 - `Enter`: Edit the highlighted item
 - `q`: Quit application
 
-#### Edit Mode
+### Edit Mode
 - `Enter`: Confirm changes and return to selection mode
 - `Esc`: Cancel changes and return to selection mode
 - `←` / `→`: Move cursor left/right
@@ -72,11 +100,30 @@ Or if you built the release version:
 - `Backspace` / `Delete`: Delete characters
 - Any printable character: Insert text
 
-#### Delete Mode
+### Delete Mode
 - `y`: Confirm deletion and return to selection mode
 - `Esc`: Cancel deletion and return to selection mode
 
-## Keyboard Shortcuts Reference
+## Graphical Interface Controls
+
+### Todo Item Management
+- **Checkbox**: Click to toggle completion status of any item
+- **Text Editing**: Click on the text field to edit todo item text directly
+- **Indentation Controls**: Use `<` and `>` buttons to decrease/increase indentation
+- **Delete**: Click the trash (🗑) button to delete an item immediately
+
+### Auto-Save
+- Changes are automatically saved when:
+  - Checkbox state changes
+  - Text editing loses focus
+  - Indentation is modified
+  - Items are deleted
+
+### Add New Items
+- Click "Add New Todo Item" button to create a new item
+- New items inherit the indentation level of the last item
+
+## Terminal Interface Keyboard Shortcuts
 
 ### Complete Command Reference
 
