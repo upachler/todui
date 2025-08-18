@@ -151,6 +151,8 @@ struct App {
     should_quit: bool,
 }
 
+const CURSOR: char = '|';
+
 impl App {
     fn new(config_dir: PathBuf, lock_file: File, todo_list: TodoList) -> Self {
         App {
@@ -429,7 +431,7 @@ fn wrap_todo_item_text(
             .nth(edit_cursor)
             .map(|(pos, _)| pos)
             .unwrap_or(edit_text.len());
-        display_text.insert(byte_pos, '|');
+        display_text.insert(byte_pos, CURSOR);
         display_text
     } else {
         item.text.clone()
@@ -605,8 +607,9 @@ fn ui(f: &mut Frame, app: &App) {
         AppMode::Delete => "Delete | y:Confirm Delete | Esc:Cancel",
     };
 
-    let status_paragraph =
-        Paragraph::new(status_text).style(Style::default().bg(Color::Blue).fg(Color::White));
+    let status_paragraph = Paragraph::new(status_text)
+        .style(Style::default().bg(Color::Blue).fg(Color::White))
+        .wrap(ratatui::widgets::Wrap { trim: true });
 
     f.render_widget(status_paragraph, status_area);
 }
@@ -998,7 +1001,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tui::{App, AppMode, wrap_todo_item_text};
+    use crate::{App, AppMode, wrap_todo_item_text};
     use chrono::NaiveDate;
 
     #[test]
@@ -1126,7 +1129,7 @@ mod tests {
         let wrapped = wrap_todo_item_text(&item, 20, true, edit_text, 10, true);
 
         assert!(wrapped.len() > 1);
-        assert!(wrapped[0].0.contains("|")); // Should contain cursor
+        assert!(wrapped[0].0.contains(CURSOR)); // Should contain cursor
         assert!(wrapped[0].0.starts_with("* [ ] Edited"));
     }
 
@@ -1538,10 +1541,10 @@ mod tests {
         let edit_text = "Hallö";
         let edit_cursor = 4; // After 'l', before 'ö'
 
-        let wrapped = tui::wrap_todo_item_text(&item, 50, true, edit_text, edit_cursor, true);
+        let wrapped = wrap_todo_item_text(&item, 50, true, edit_text, edit_cursor, true);
 
         assert_eq!(wrapped.len(), 1);
-        let term = format!("Hall{}ö", tui::CURSOR);
+        let term = format!("Hall{}ö", CURSOR);
         assert!(wrapped[0].0.contains(&term)); // Cursor should be positioned correctly
     }
 }
