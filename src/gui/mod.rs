@@ -135,6 +135,23 @@ pub fn run_gui(todo_app: TodoApp) -> Result<(), Box<dyn Error>> {
         });
     }
 
+    // Move item callback
+    {
+        let todo_app_rc = todo_app_rc.clone();
+        let ui_weak = ui_weak.clone();
+        ui.on_move_item(move |from_index, to_index| {
+            if let Ok(mut app) = todo_app_rc.try_borrow_mut() {
+                let _ = app.move_item(from_index as usize, to_index as usize);
+                if let Some(ui) = ui_weak.upgrade() {
+                    let items: slint::ModelRc<TodoItemData> = slint::ModelRc::new(
+                        slint::VecModel::from(convert_items(&app.todo_list.items)),
+                    );
+                    ui.set_todo_items(items);
+                }
+            }
+        });
+    }
+
     ui.run()?;
     Ok(())
 }

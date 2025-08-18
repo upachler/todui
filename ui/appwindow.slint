@@ -16,6 +16,7 @@ export component AppWindow inherits Window {
     callback indent-item-right(int);
     callback delete-item(int);
     callback add-new-item();
+    callback move-item(int, int);
 
     title: root.window-title;
     width: 800px;
@@ -50,13 +51,63 @@ export component AppWindow inherits Window {
 
                 for item[index] in root.todo-items: Rectangle {
                     height: 40px;
-                    background: Colors.white;
-                    border-width: 1px;
-                    border-color: Colors.lightgray;
+                    // background: item-area.is-dragging ? Colors.lightgreen :
+                    //            (item-area.has-hover ? Colors.lightblue : Colors.black);
+                    border-width: item-area.is-dragging ? 2px : 1px;
+                    border-color: item-area.is-dragging ? Colors.green : Colors.lightgray;
+                    drop-shadow-blur: item-area.is-dragging ? 4px : 0px;
+                    drop-shadow-offset-y: item-area.is-dragging ? 2px : 0px;
+
+                    item-area := TouchArea {
+                        property <bool> is-dragging: false;
+                        property <length> drag-start-y: 0;
+                        property <int> drag-item-index: index;
+
+                        pointer-event(event) => {
+                            if (event.button == PointerEventButton.left) {
+                                if (event.kind == PointerEventKind.down) {
+                                    self.is-dragging = true;
+                                    self.drag-start-y = self.mouse-y;
+                                } else if (event.kind == PointerEventKind.up) {
+                                    self.is-dragging = false;
+                                }
+                            } else if (event.kind == PointerEventKind.move) {
+                                if (self.is-dragging) {
+                                    // Calculate drop position based on mouse movement
+                                    if (abs(self.mouse-y - self.drag-start-y) > 20px) {
+                                        if (self.mouse-y > self.drag-start-y + 20px && index < root.todo-items.length - 1) {
+                                            // Move down
+                                            root.move-item(index, index + 1);
+                                        } else if (self.mouse-y < self.drag-start-y - 20px && index > 0) {
+                                            // Move up
+                                            root.move-item(index, index - 1);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
 
                     HorizontalBox {
                         padding: 8px;
                         spacing: 8px;
+
+                        // Drag handle
+                        Rectangle {
+                            width: 24px;
+                            background: item-area.is-dragging ? Colors.darkgray :
+                                       (item-area.has-hover ? Colors.lightgray : Colors.transparent);
+                            border-radius: 3px;
+
+                            Text {
+                                text: "⋮⋮";
+                                font-size: 14px;
+                                color: item-area.is-dragging ? Colors.white : Colors.gray;
+                                vertical-alignment: center;
+                                horizontal-alignment: center;
+                                font-weight: item-area.is-dragging ? 700 : 400;
+                            }
+                        }
 
                         // Indentation spacer
                         Rectangle {
@@ -75,7 +126,7 @@ export component AppWindow inherits Window {
                         LineEdit {
                             text: item.text;
                             horizontal-stretch: 1;
-                            edited(text) => {
+                            accepted(text) => {
                                 root.item-text-changed(index, text);
                             }
                         }
@@ -118,7 +169,7 @@ export component AppWindow inherits Window {
             background: Colors.lightgray;
 
             Text {
-                text: @tr("Use mouse to interact with todo items. Changes are saved automatically.");
+                text: @tr("Drag items by their handle (⋮⋮) to reorder them. Use checkboxes, text fields and buttons to interact. Changes are saved automatically.");
                 vertical-alignment: center;
                 horizontal-alignment: center;
                 font-size: 12px;

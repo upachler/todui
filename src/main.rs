@@ -203,6 +203,18 @@ impl TodoApp {
         self.save_todo_list()?;
         Ok(())
     }
+
+    pub fn move_item(&mut self, from_index: usize, to_index: usize) -> Result<(), Box<dyn Error>> {
+        if from_index < self.todo_list.items.len()
+            && to_index < self.todo_list.items.len()
+            && from_index != to_index
+        {
+            let item = self.todo_list.items.remove(from_index);
+            self.todo_list.items.insert(to_index, item);
+            self.save_todo_list()?;
+        }
+        Ok(())
+    }
 }
 
 impl Drop for TodoApp {
@@ -454,5 +466,78 @@ mod tests {
         assert!(markdown.contains("* [ ] First item"));
         assert!(markdown.contains("  * [ ] Second item"));
         assert!(markdown.contains("    * [ ] Third item"));
+    }
+
+    #[test]
+    fn test_move_item() {
+        let date = NaiveDate::from_ymd_opt(2025, 8, 14).unwrap();
+        let config_dir = std::env::temp_dir().join("todui_test_move");
+        let _ = std::fs::remove_dir_all(&config_dir);
+        std::fs::create_dir_all(&config_dir).unwrap();
+
+        let mut todo_list = TodoList::new(date);
+        todo_list
+            .items
+            .push(TodoItem::new("Item 1".to_string(), false, 0));
+        todo_list
+            .items
+            .push(TodoItem::new("Item 2".to_string(), false, 0));
+        todo_list
+            .items
+            .push(TodoItem::new("Item 3".to_string(), false, 0));
+
+        let mut todo_app = TodoApp::new(config_dir.clone(), todo_list);
+
+        // Test moving item from index 0 to index 2
+        todo_app.move_item(0, 2).unwrap();
+        assert_eq!(todo_app.todo_list.items[0].text, "Item 2");
+        assert_eq!(todo_app.todo_list.items[1].text, "Item 3");
+        assert_eq!(todo_app.todo_list.items[2].text, "Item 1");
+
+        // Test moving item from index 2 to index 0
+        todo_app.move_item(2, 0).unwrap();
+        assert_eq!(todo_app.todo_list.items[0].text, "Item 1");
+        assert_eq!(todo_app.todo_list.items[1].text, "Item 2");
+        assert_eq!(todo_app.todo_list.items[2].text, "Item 3");
+
+        // Test moving item to same position (should be no-op)
+        todo_app.move_item(1, 1).unwrap();
+        assert_eq!(todo_app.todo_list.items[0].text, "Item 1");
+        assert_eq!(todo_app.todo_list.items[1].text, "Item 2");
+        assert_eq!(todo_app.todo_list.items[2].text, "Item 3");
+
+        // Cleanup
+        let _ = std::fs::remove_dir_all(&config_dir);
+    }
+
+    #[test]
+    fn test_move_item_bounds_checking() {
+        let date = NaiveDate::from_ymd_opt(2025, 8, 14).unwrap();
+        let config_dir = std::env::temp_dir().join("todui_test_move_bounds");
+        let _ = std::fs::remove_dir_all(&config_dir);
+        std::fs::create_dir_all(&config_dir).unwrap();
+
+        let mut todo_list = TodoList::new(date);
+        todo_list
+            .items
+            .push(TodoItem::new("Item 1".to_string(), false, 0));
+        todo_list
+            .items
+            .push(TodoItem::new("Item 2".to_string(), false, 0));
+
+        let mut todo_app = TodoApp::new(config_dir.clone(), todo_list);
+
+        // Test moving with out-of-bounds source index
+        todo_app.move_item(5, 0).unwrap();
+        assert_eq!(todo_app.todo_list.items[0].text, "Item 1");
+        assert_eq!(todo_app.todo_list.items[1].text, "Item 2");
+
+        // Test moving with out-of-bounds target index
+        todo_app.move_item(0, 5).unwrap();
+        assert_eq!(todo_app.todo_list.items[0].text, "Item 1");
+        assert_eq!(todo_app.todo_list.items[1].text, "Item 2");
+
+        // Cleanup
+        let _ = std::fs::remove_dir_all(&config_dir);
     }
 }
