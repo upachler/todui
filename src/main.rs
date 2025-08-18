@@ -175,9 +175,8 @@ impl TodoApp {
     }
 
     fn indent_item_by(&mut self, index: usize, delta: isize) -> Result<(), Box<dyn Error>> {
-        self.todo_list.items[index]
-            .indent_level
-            .saturating_add_signed(delta);
+        let level = &mut self.todo_list.items[index].indent_level;
+        *level = level.saturating_add_signed(delta);
         self.save_todo_list()?;
         Ok(())
     }
