@@ -824,4 +824,189 @@ mod test {
         let term = format!("Hall{}ö", CURSOR);
         assert!(wrapped[0].0.contains(&term)); // Cursor should be positioned correctly
     }
+
+    #[test]
+    fn test_tab_change_indent_level() {
+        let date = NaiveDate::from_ymd_opt(2025, 8, 14).unwrap();
+        let mut todo_list = TodoList::new(date);
+        todo_list
+            .items
+            .push(TodoItem::new("Item 1".to_string(), false, 0));
+        todo_list
+            .items
+            .push(TodoItem::new("Item 2".to_string(), false, 1));
+
+        let mut app = App::new(TodoApp::new(PathBuf::new(), todo_list));
+        app.selected_index = 0;
+
+        // Test Tab key increases indent level
+        assert_eq!(app.todo_list.todo_list.items[0].indent_level, 0);
+        app.handle_key_event(KeyCode::Tab).unwrap();
+        assert_eq!(app.todo_list.todo_list.items[0].indent_level, 1);
+
+        // Test multiple Tab presses
+        app.handle_key_event(KeyCode::Tab).unwrap();
+        assert_eq!(app.todo_list.todo_list.items[0].indent_level, 2);
+
+        // Test Shift+Tab (BackTab) decreases indent level
+        assert_eq!(app.todo_list.todo_list.items[0].indent_level, 2);
+        app.handle_key_event(KeyCode::BackTab).unwrap();
+        assert_eq!(app.todo_list.todo_list.items[0].indent_level, 1);
+
+        // Test multiple Shift+Tab presses
+        app.handle_key_event(KeyCode::BackTab).unwrap();
+        assert_eq!(app.todo_list.todo_list.items[0].indent_level, 0);
+
+        // Test that Shift+Tab at indent level 0 doesn't go negative
+        assert_eq!(app.todo_list.todo_list.items[0].indent_level, 0);
+        app.handle_key_event(KeyCode::BackTab).unwrap();
+        assert_eq!(app.todo_list.todo_list.items[0].indent_level, 0); // Should remain 0
+
+        // Test multiple attempts
+        app.handle_key_event(KeyCode::BackTab).unwrap();
+        app.handle_key_event(KeyCode::BackTab).unwrap();
+        assert_eq!(app.todo_list.todo_list.items[0].indent_level, 0);
+    }
+
+    #[test]
+    fn test_tab_indentation_with_different_selected_indices() {
+        let date = NaiveDate::from_ymd_opt(2025, 8, 14).unwrap();
+        let mut todo_list = TodoList::new(date);
+        todo_list
+            .items
+            .push(TodoItem::new("Item 1".to_string(), false, 0));
+        todo_list
+            .items
+            .push(TodoItem::new("Item 2".to_string(), false, 1));
+        todo_list
+            .items
+            .push(TodoItem::new("Item 3".to_string(), false, 2));
+
+        let mut app = App::new(TodoApp::new(PathBuf::new(), todo_list));
+
+        // Test indenting different items
+        app.selected_index = 1;
+        assert_eq!(app.todo_list.todo_list.items[1].indent_level, 1);
+        app.handle_key_event(KeyCode::Tab).unwrap();
+        assert_eq!(app.todo_list.todo_list.items[1].indent_level, 2);
+        // Other items should be unchanged
+        assert_eq!(app.todo_list.todo_list.items[0].indent_level, 0);
+        assert_eq!(app.todo_list.todo_list.items[2].indent_level, 2);
+
+        // Test unindenting different item
+        app.selected_index = 2;
+        app.handle_key_event(KeyCode::BackTab).unwrap();
+        assert_eq!(app.todo_list.todo_list.items[2].indent_level, 1);
+        // Other items should be unchanged
+        assert_eq!(app.todo_list.todo_list.items[0].indent_level, 0);
+        assert_eq!(app.todo_list.todo_list.items[1].indent_level, 2);
+    }
+
+    #[test]
+    fn test_tab_indentation_sequence() {
+        let date = NaiveDate::from_ymd_opt(2025, 8, 14).unwrap();
+        let mut todo_list = TodoList::new(date);
+        todo_list
+            .items
+            .push(TodoItem::new("Item 1".to_string(), false, 1));
+
+        let mut app = App::new(TodoApp::new(PathBuf::new(), todo_list));
+        app.selected_index = 0;
+
+        // Test a sequence of tab operations
+        assert_eq!(app.todo_list.todo_list.items[0].indent_level, 1);
+
+        // Indent right twice
+        app.handle_key_event(KeyCode::Tab).unwrap();
+        app.handle_key_event(KeyCode::Tab).unwrap();
+        assert_eq!(app.todo_list.todo_list.items[0].indent_level, 3);
+
+        // Indent left once
+        app.handle_key_event(KeyCode::BackTab).unwrap();
+        assert_eq!(app.todo_list.todo_list.items[0].indent_level, 2);
+
+        // Indent right once more
+        app.handle_key_event(KeyCode::Tab).unwrap();
+        assert_eq!(app.todo_list.todo_list.items[0].indent_level, 3);
+
+        // Indent left until zero
+        app.handle_key_event(KeyCode::BackTab).unwrap();
+        app.handle_key_event(KeyCode::BackTab).unwrap();
+        app.handle_key_event(KeyCode::BackTab).unwrap();
+        assert_eq!(app.todo_list.todo_list.items[0].indent_level, 0);
+    }
+
+    #[test]
+    fn test_tab_indentation_only_works_in_selection_mode() {
+        let date = NaiveDate::from_ymd_opt(2025, 8, 14).unwrap();
+        let mut todo_list = TodoList::new(date);
+        todo_list
+            .items
+            .push(TodoItem::new("Item 1".to_string(), false, 0));
+
+        let mut app = App::new(TodoApp::new(PathBuf::new(), todo_list));
+        app.selected_index = 0;
+
+        // Test that Tab doesn't work in Edit mode
+        app.mode = AppMode::Edit;
+        app.edit_text = "editing".to_string();
+        app.edit_cursor = 7;
+
+        assert_eq!(app.todo_list.todo_list.items[0].indent_level, 0);
+        app.handle_key_event(KeyCode::Tab).unwrap();
+        assert_eq!(app.todo_list.todo_list.items[0].indent_level, 0); // Should remain unchanged
+
+        // Test that Tab doesn't work in Delete mode
+        app.mode = AppMode::Delete;
+        app.handle_key_event(KeyCode::Tab).unwrap();
+        assert_eq!(app.todo_list.todo_list.items[0].indent_level, 0); // Should remain unchanged
+
+        // Test that Tab works in Selection mode
+        app.mode = AppMode::Selection;
+        app.handle_key_event(KeyCode::Tab).unwrap();
+        assert_eq!(app.todo_list.todo_list.items[0].indent_level, 1); // Should increase
+    }
+
+    #[test]
+    fn test_tab_indentation_with_empty_list() {
+        let date = NaiveDate::from_ymd_opt(2025, 8, 14).unwrap();
+        let todo_list = TodoList::new(date);
+
+        let mut app = App::new(TodoApp::new(PathBuf::new(), todo_list));
+        app.selected_index = 0;
+
+        // Test that Tab doesn't crash with empty list
+        assert_eq!(app.todo_list.todo_list.items.len(), 0);
+        let result = app.handle_key_event(KeyCode::Tab);
+        assert!(result.is_ok()); // Should not panic or error
+
+        // Test that BackTab doesn't crash with empty list
+        let result = app.handle_key_event(KeyCode::BackTab);
+        assert!(result.is_ok()); // Should not panic or error
+
+        assert_eq!(app.todo_list.todo_list.items.len(), 0); // List should still be empty
+    }
+
+    #[test]
+    fn test_tab_indentation_with_invalid_selected_index() {
+        let date = NaiveDate::from_ymd_opt(2025, 8, 14).unwrap();
+        let mut todo_list = TodoList::new(date);
+        todo_list
+            .items
+            .push(TodoItem::new("Item 1".to_string(), false, 0));
+
+        let mut app = App::new(TodoApp::new(PathBuf::new(), todo_list));
+        app.selected_index = 5; // Invalid index - beyond list length
+
+        // Test that Tab handles invalid index gracefully
+        assert_eq!(app.todo_list.todo_list.items[0].indent_level, 0);
+        let _result = app.handle_key_event(KeyCode::Tab);
+        // The method should either handle the bounds check or return an error
+        // Either way, it shouldn't panic and the valid item should be unchanged
+        assert_eq!(app.todo_list.todo_list.items[0].indent_level, 0);
+
+        // Test same for BackTab
+        let _result = app.handle_key_event(KeyCode::BackTab);
+        assert_eq!(app.todo_list.todo_list.items[0].indent_level, 0);
+    }
 }
